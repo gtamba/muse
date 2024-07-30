@@ -32,21 +32,34 @@ class PitchMapping(ClassOnly):
     # tuple to handle enharmonics, first example is the sharp version, second is the flat version
     INDEX_TO_PITCHES: tp.ClassVar[tp.Mapping[int, str]] = {
         0: ("C", "C"),
-        1: ("C#", "Db"),
+        1: ("Db", "C#"),
         2: ("D", "D"),
-        3: ("D#", "Eb"),
-        4: ("E", "F"),
+        3: ("Eb", "D#"),
+        4: ("E", "E"),
         5: ("F", "F"),
-        6: ("F#", "Gb"),
+        6: ("Gb", "F#"),
         7: ("G", "G"),
-        8: ("G#", "Ab"),
+        8: ("Ab", "G#"),
         9: ("A", "A"),
-        10: ("A#", "Bb"),
+        10: ("Bb", "A#"),
         11: ("B", "B"),
     }
-
+    BASE_TONES: tp.ClassVar[tp.List[str]] = [
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "A",
+        "B",
+    ]
     A4_OFFSET = 57
     A4_FREQ = 440
+
+    @classmethod
+    def get_base_tones(cls, base):
+        idx = cls.BASE_TONES.index(base)
+        return cls.BASE_TONES[idx:] + cls.BASE_TONES[:idx]
 
 
 @dataclass
@@ -74,6 +87,16 @@ class Pitch:
     def freq(self):
         return self._freq
 
+    @property
+    def base_tone(self):
+        return self.note[0]
+
+    def has_enharmonic(self) -> bool:
+        return self.note in ("C#", "Db", "D#", "Eb", "F#", "Gb", "G#", "Ab", "A#", "Bb")
+
+    def toggle_enharmonic(self, sharp=True) -> None:
+        self.note = PitchMapping.INDEX_TO_PITCHES[self._offset_c0 % 12][int(sharp)]
+
     # TODO: Handle enharmonics
     def step(self, semitones: int, reset_octave=False) -> "Pitch":
         if semitones == 0:
@@ -84,8 +107,10 @@ class Pitch:
             raise ArithmeticError("Cannot step below C0")
 
         octave = self.octave if reset_octave else target // 12
+        new_note = PitchMapping.INDEX_TO_PITCHES[target % 12][0]
+
         return Pitch(
-            note=PitchMapping.INDEX_TO_PITCHES[target % 12][0 if semitones > 0 else -1],
+            note=new_note,
             octave=octave,
         )
 
@@ -122,8 +147,26 @@ class Interval:
         11: "Major Seventh",
         12: "Octave",
     }
-
+    SHORT_NAMES_TO_INTERVALS: tp.ClassVar[tp.Mapping[str, int]] = {
+        "P1": 0,
+        "m2": 1,
+        "M2": 2,
+        "m3": 3,
+        "M3": 4,
+        "P4": 5,
+        "TT": 6,
+        "P5": 7,
+        "m6": 8,
+        "M6": 9,
+        "m7": 10,
+        "M7": 11,
+        "P8": 12,
+    }
     interval: int
+
+    @classmethod
+    def from_name(cls, name: str) -> "Interval":
+        return cls(cls.SHORT_NAMES_TO_INTERVALS[name])
 
     @property
     def name(self, short=True):
@@ -156,9 +199,16 @@ class ScaleSequence:
                 raise ValueError(f"Invalid Scale Description : {sequence}")
             sequence = self.SCALES[sequence.upper()]
         pitches = [self.root]
-        for interval in sequence:
-            pitches.append(pitches[-1].step(interval, reset_octave=True))
+        base_tones = PitchMapping.get_base_tones(self.root.base_tone)
+
+        for idx, interval in enumerate(sequence):
+            step = pitches[-1].step(interval, reset_octave=True)
+            if idx != len(sequence) - 1:
+                if step.base_tone != base_tones[idx + 1]:
+                    step.toggle_enharmonic(sharp=True)
+            pitches.append(step)
         self.pitches = pitches
+        self.tones = [pitch.note for pitch in self.pitches]
 
     @property
     def triads(self, extended=False):
@@ -175,77 +225,33 @@ class ScaleSequence:
                 ]
 
 
-# class Intervals(ClassOnly):
-#     UNISON = 0
-#     MINOR_SECOND = 1
-#     MAJOR_SECOND = 2
-#     MINOR_THIRD = 3
-#     MAJOR_THIRD = 4
-#     PERFECT_FOURTH = 5
-#     TRITONE = 6
-#     PERFECT_FIFTH = 7
-#     MINOR_SIXTH = 8
-#     MAJOR_SIXTH = 9
-#     MINOR_SEVENTH = 10
-#     MAJOR_SEVENTH = 11
-#     OCTAVE = 12
+@dataclass
+class Guitar:
+    tuning: tp.Sequence[Pitch] = dataclasses.field(
+        default_factory=lambda: [
+            Pitch("E", 2),
+            Pitch("A", 2),
+            Pitch("D", 3),
+            Pitch("G", 3),
+            Pitch("B", 3),
+            Pitch("E", 4),
+        ]
+    )
+    n_frets: int = 24
 
-#     @classmethod
-#     def interval_from_name(cls, name: str) -> int:
-#         return {
-#             "P1": cls.UNISON,
-#             "m2": cls.MINOR_SECOND,
-#             "M2": cls.MAJOR_SECOND,
-#             "m3": cls.MINOR_THIRD,
-#             "M3": cls.MAJOR_THIRD,
-#             "P4": cls.PERFECT_FOURTH,
-#             "TT": cls.TRITONE,
-#             "P5": cls.PERFECT_FIFTH,
-#             "m6": cls.MINOR_SIXTH,
-#             "M6": cls.MAJOR_SIXTH,
-#             "m7": cls.MINOR_SEVENTH,
-#             "M7": cls.MAJOR_SEVENTH,
-#             "P8": cls.OCTAVE,
-#         }[name]
+    def __post_init__(self):
+        self.fretboard = []
 
-#     @classmethod
-#     def name_from_interval(cls, interval: int, ascending=True) -> str:
-#         if not ascending:
-#             interval -= 12
+        for string in self.tuning:
+            self.fretboard.append(
+                [string.step(fret) for fret in range(self.n_frets + 1)]
+            )
 
-#         return {
-#             cls.UNISON: "P1",
-#             cls.MINOR_SECOND: "m2",
-#             cls.MAJOR_SECOND: "M2",
-#             cls.MINOR_THIRD: "m3",
-#             cls.MAJOR_THIRD: "M3",
-#             cls.PERFECT_FOURTH: "P4",
-#             cls.TRITONE: "TT",
-#             cls.PERFECT_FIFTH: "P5",
-#             cls.MINOR_SIXTH: "m6",
-#             cls.MAJOR_SIXTH: "M6",
-#             cls.MINOR_SEVENTH: "m7",
-#             cls.MAJOR_SEVENTH: "M7",
-#             cls.OCTAVE: "P8",
-#         }[interval]
-
-
-# class ScaleSequence(ClassOnly):
-#     MAJOR_SCALE = (2, 2, 1, 2, 2, 2, 1)
-
-#     @staticmethod
-#     def shift_tonic(sequence: tp.Sequence[Pitch], mode: int) -> tp.List[Pitch]:
-#         return sequence[mode - 1 :] + sequence[: mode - 1]
-
-#     @classmethod
-#     def major(cls, root: Pitch) -> tp.List[Pitch]:
-#         out = [root]
-#         for step in cls.MAJOR_SCALE:
-#             out.append(out[-1].step(step))
-#         return out
+    def __getitem__(self, string):
+        string = len(self.tuning) - string
+        return self.fretboard[string]
 
 
 if __name__ == "__main__":
-    scale = ScaleSequence(Pitch("C"), "MAJOR")
-    print(scale.pitches)
-    print([t for t in scale.extended_triads])
+    scale = ScaleSequence(Pitch("E", 2), "MAJOR")
+    print(scale.tones)
